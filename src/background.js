@@ -21,6 +21,37 @@ function createMenus() {
 
 chrome.runtime.onInstalled.addListener(createMenus);
 
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request?.type !== "OPEN_EXPORT_POPUP") return;
+
+  if (typeof chrome.action?.openPopup !== "function") {
+    sendResponse({
+      ok: false,
+      error: "当前浏览器版本不支持从页面打开扩展弹窗，请点击浏览器工具栏中的扩展图标"
+    });
+    return;
+  }
+
+  const options = Number.isInteger(sender.tab?.windowId)
+    ? { windowId: sender.tab.windowId }
+    : undefined;
+
+  try {
+    const opened = options
+      ? chrome.action.openPopup(options)
+      : chrome.action.openPopup();
+    Promise.resolve(opened).then(() => {
+      sendResponse({ ok: true });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error?.message || String(error) });
+    });
+  } catch (error) {
+    sendResponse({ ok: false, error: error?.message || String(error) });
+  }
+
+  return true;
+});
+
 async function ensureContentScript(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: "PING" });

@@ -22,9 +22,11 @@
     "button", "input", "textarea", "select", "option", "svg", "canvas",
     "video", "audio", "[contenteditable='true']", "[data-testid*='copy']",
     "[aria-label*='Copy']", "[aria-label*='copy']", ".sr-only",
-    ".chatgpt-exporter-message-toggle"
+    ".chatgpt-exporter-message-toggle", "#chatgpt-exporter-page-button"
   ].join(",");
 
+  const PAGE_BUTTON_ID = "chatgpt-exporter-page-button";
+  const PAGE_BUTTON_STYLE_ID = "chatgpt-exporter-page-button-style";
   const SELECTION_STYLE_ID = "chatgpt-exporter-selection-style";
   const SELECTION_TOOLBAR_ID = "chatgpt-exporter-selection-toolbar";
   const SELECTION_CONTROL_CLASS = "chatgpt-exporter-message-toggle";
@@ -46,26 +48,120 @@
     }
   }
 
+  function normalizeLatexSource(value) {
+    let latex = String(value || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\u200b\ufeff]/g, "")
+      .replace(/\u00a0/g, " ")
+      .trim();
+    const wrappers = [
+      ["\\[", "\\]"],
+      ["\\(", "\\)"],
+      ["$$", "$$"],
+      ["$", "$"]
+    ];
+
+    // Some renderers store the original source with its Markdown delimiters.
+    // Strip at most two nested pairs so the exporter never emits `$\(...\)$`.
+    for (let pass = 0; pass < 2; pass += 1) {
+      const wrapper = wrappers.find(([opening, closing]) =>
+        latex.startsWith(opening)
+        && latex.endsWith(closing)
+        && latex.length > opening.length + closing.length
+      );
+      if (!wrapper) break;
+      latex = latex.slice(wrapper[0].length, -wrapper[1].length).trim();
+    }
+    return latex;
+  }
+
+  function latexAttribute(element, name) {
+    const value = element.getAttribute?.(name);
+    if (!value?.trim()) return "";
+    const normalized = normalizeLatexSource(value);
+    if (name === "data-math" && /^(?:true|false|inline|display|block)$/i.test(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
+
+  function latexFromElement(element) {
+    const annotations = element.matches?.("annotation")
+      ? [element]
+      : [...element.querySelectorAll("annotation")];
+    const annotation = annotations.find((node) =>
+      /(?:x-tex|tex|latex)/i.test(node.getAttribute("encoding") || "")
+    );
+    if (annotation?.textContent?.trim()) return normalizeLatexSource(annotation.textContent);
+
+    const script = element.matches?.('script[type^="math/tex" i]')
+      ? element
+      : element.querySelector('script[type^="math/tex" i]');
+    if (script?.textContent?.trim()) return normalizeLatexSource(script.textContent);
+
+    const candidates = [element, ...element.querySelectorAll(
+      "[data-latex],[data-tex],[data-math],[data-formula],math[alttext]"
+    )];
+    for (const candidate of candidates) {
+      for (const name of ["data-latex", "data-tex", "data-math", "data-formula", "alttext"]) {
+        const latex = latexAttribute(candidate, name);
+        if (latex) return latex;
+      }
+    }
+
+    if (element.matches?.(".katex,mjx-container,math")) {
+      const ariaLabel = latexAttribute(element, "aria-label");
+      if (ariaLabel) return ariaLabel;
+    }
+
+    if (element.matches?.(".math-inline,.math-display,[data-math-style],[data-math-display]")) {
+      return normalizeLatexSource(element.textContent);
+    }
+    return "";
+  }
+
+  function replaceMathElement(element, mode) {
+    const latex = latexFromElement(element);
+    if (!latex) return false;
+    const replacement = document.createElement("span");
+    replacement.dataset.exportMath = mode;
+    replacement.className = `math-${mode}`;
+    replacement.textContent = latex;
+    element.replaceWith(replacement);
+    return true;
+  }
+
   function prepareMath(root) {
-    const displays = [...root.querySelectorAll(".katex-display")];
-    displays.forEach((element) => {
-      const latex = element.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
-      if (!latex) return;
-      const replacement = document.createElement("span");
-      replacement.dataset.exportMath = "display";
-      replacement.className = "math-display";
-      replacement.textContent = latex;
-      element.replaceWith(replacement);
+    const displaySelectors = [
+      ".katex-display",
+      'mjx-container[display="true"]',
+      'math[display="block"]',
+      'script[type^="math/tex" i][type*="mode=display" i]',
+      '[data-math-style="display"]',
+      '[data-math-display="true"]',
+      ".math-display"
+    ].join(",");
+    [...root.querySelectorAll(displaySelectors)].forEach((element) => {
+      if (!root.contains(element)) return;
+      replaceMathElement(element, "display");
     });
 
-    [...root.querySelectorAll(".katex")].forEach((element) => {
-      const latex = element.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
-      if (!latex) return;
-      const replacement = document.createElement("span");
-      replacement.dataset.exportMath = "inline";
-      replacement.className = "math-inline";
-      replacement.textContent = latex;
-      element.replaceWith(replacement);
+    const inlineSelectors = [
+      ".katex",
+      'mjx-container:not([display="true"])',
+      'math:not([display="block"])',
+      '[data-math-style="inline"]',
+      '[data-math-display="false"]',
+      ".math-inline",
+      "[data-latex]",
+      "[data-tex]",
+      "[data-math]",
+      "[data-formula]",
+      'script[type^="math/tex" i]:not([type*="mode=display" i])'
+    ].join(",");
+    [...root.querySelectorAll(inlineSelectors)].forEach((element) => {
+      if (!root.contains(element) || element.closest?.("[data-export-math]")) return;
+      replaceMathElement(element, "inline");
     });
   }
 
@@ -539,6 +635,60 @@
     return { count: entries.length, selectedCount: selectedIds.size };
   }
 
+  function installPageExportButton() {
+    if (document.getElementById(PAGE_BUTTON_ID)) return;
+
+    const style = document.createElement("style");
+    style.id = PAGE_BUTTON_STYLE_ID;
+    style.textContent = `
+      #${PAGE_BUTTON_ID} { position:fixed !important; z-index:2147483644 !important; top:68px !important; right:18px !important; display:inline-flex !important; align-items:center !important; justify-content:center !important; gap:7px !important; min-width:74px !important; min-height:38px !important; margin:0 !important; padding:8px 12px !important; border:1px solid rgba(8,127,91,.32) !important; border-radius:11px !important; background:rgba(255,255,255,.96) !important; color:#087f5b !important; box-shadow:0 7px 24px rgba(0,0,0,.14) !important; backdrop-filter:blur(12px) !important; font:750 13px/1 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif !important; cursor:pointer !important; user-select:none !important; -webkit-user-select:none !important; transition:transform .12s ease,box-shadow .12s ease,background .12s ease !important; }
+      #${PAGE_BUTTON_ID}[hidden] { display:none !important; }
+      #${PAGE_BUTTON_ID}:hover { transform:translateY(-1px) !important; background:#ecf8f3 !important; box-shadow:0 9px 28px rgba(0,0,0,.17) !important; }
+      #${PAGE_BUTTON_ID}:focus-visible { outline:3px solid rgba(16,163,127,.3) !important; outline-offset:2px !important; }
+      #${PAGE_BUTTON_ID}:disabled { cursor:wait !important; opacity:.65 !important; transform:none !important; }
+      #${PAGE_BUTTON_ID} svg { display:block !important; width:17px !important; height:17px !important; flex:0 0 auto !important; }
+      @media (prefers-color-scheme:dark) { #${PAGE_BUTTON_ID} { border-color:rgba(25,195,125,.45) !important; background:rgba(33,33,33,.94) !important; color:#6ee7b7 !important; } #${PAGE_BUTTON_ID}:hover { background:#183c32 !important; } }
+      @media (max-width:700px) { #${PAGE_BUTTON_ID} { top:60px !important; right:10px !important; min-width:40px !important; width:40px !important; height:40px !important; padding:0 !important; border-radius:50% !important; } #${PAGE_BUTTON_ID} span { display:none !important; } }
+      @media (prefers-reduced-motion:reduce) { #${PAGE_BUTTON_ID} { transition:none !important; } }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+
+    const button = document.createElement("button");
+    button.id = PAGE_BUTTON_ID;
+    button.type = "button";
+    button.hidden = true;
+    button.title = "打开 ChatGPT 对话导出";
+    button.setAttribute("aria-label", button.title);
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>导出</span>`;
+    document.documentElement.appendChild(button);
+
+    let visibilityTimer = 0;
+    const updateVisibility = () => {
+      window.clearTimeout(visibilityTimer);
+      visibilityTimer = window.setTimeout(() => {
+        button.hidden = getRoleNodes().length === 0;
+      }, 120);
+    };
+    const observer = new MutationObserver(updateVisibility);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    updateVisibility();
+
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.disabled = true;
+      try {
+        const response = await chrome.runtime.sendMessage({ type: "OPEN_EXPORT_POPUP" });
+        if (!response?.ok) throw new Error(response?.error || "无法打开导出弹窗");
+      } catch (error) {
+        console.error("[ChatGPT Exporter] 无法打开弹窗", error);
+        showToast("无法打开导出弹窗，请点击浏览器工具栏中的扩展图标", true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
   function downloadText(content, filename, mimeType) {
     const blob = new Blob(["\ufeff", content], { type: `${mimeType};charset=utf-8` });
     const url = URL.createObjectURL(blob);
@@ -572,6 +722,8 @@
     document.documentElement.appendChild(toast);
     window.setTimeout(() => toast.remove(), 2600);
   }
+
+  installPageExportButton();
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     try {
