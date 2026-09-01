@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatGPT 对话导出</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div>
+        <h1>对话增强导出</h1>
+        <p>ChatGPT Exporter</p>
+      </div>
+      <span class="version">v0.2</span>
+    </header>
+
+    <section id="loading" class="state-card" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>正在读取当前对话…</span>
+    </section>
+
+    <section id="errorState" class="state-card state-error" hidden>
+      <strong>暂时无法读取</strong>
+      <p id="errorMessage"></p>
+      <button id="retryButton" class="button button-secondary" type="button">重新检测</button>
+    </section>
+
+    <form id="exportForm" hidden>
+      <section class="conversation-card">
+        <div class="eyebrow">当前对话</div>
+        <h2 id="conversationTitle">ChatGPT 对话</h2>
+        <div class="conversation-meta">
+          <span id="messageCount">0 条消息</span>
+          <span class="privacy"><i></i>仅本地处理</span>
+        </div>
+      </section>
+
+      <fieldset class="section">
+        <legend>导出格式</legend>
+        <div class="format-grid">
+          <label class="format-card">
+            <input type="radio" name="format" value="markdown" checked>
+            <span class="format-icon">M↓</span>
+            <span><strong>Markdown</strong><small>适合笔记与版本管理</small></span>
+          </label>
+          <label class="format-card">
+            <input type="radio" name="format" value="html">
+            <span class="format-icon">&lt;/&gt;</span>
+            <span><strong>HTML</strong><small>独立文件，保留排版</small></span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="section compact-section">
+        <legend>消息范围</legend>
+        <div class="range-row">
+          <label>从 <input id="rangeFrom" type="number" min="1" value="1" inputmode="numeric"></label>
+          <span>至</span>
+          <label><input id="rangeTo" type="number" min="1" value="1" inputmode="numeric"> 条</label>
+          <output id="selectedCount">已选 0 条</output>
+        </div>
+        <div class="chip-row" aria-label="角色筛选">
+          <label class="check-chip"><input id="includeUser" type="checkbox" checked><span>用户消息</span></label>
+          <label class="check-chip"><input id="includeAssistant" type="checkbox" checked><span>ChatGPT 回复</span></label>
+        </div>
+        <div class="page-selection-row">
+          <button id="selectOnPageButton" class="page-selection-button" type="button">
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 6.5 7 8.5 10.5 5M13 7h6M5 12.5l2 2 3.5-3.5M13 13h6M5 18.5l2 2 3.5-3.5M13 19h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>在页面逐条选择</span>
+          </button>
+          <button id="clearPageSelectionButton" class="selection-clear-button" type="button" hidden>恢复范围</button>
+        </div>
+        <p id="pageSelectionStatus" class="page-selection-status" hidden></p>
+        <p class="page-selection-help">可勾选第 1、3、8 条等不连续消息；选择完成后重新打开扩展。</p>
+      </fieldset>
+
+      <fieldset class="section options-section">
+        <legend>内容选项</legend>
+        <label class="option-row"><span><strong>角色标题</strong><small>区分用户与 ChatGPT 内容</small></span><input id="includeRoleLabels" type="checkbox" class="switch" checked></label>
+        <label class="option-row"><span><strong>导出信息</strong><small>标题、时间、数量与来源</small></span><input id="includeMetadata" type="checkbox" class="switch" checked></label>
+        <label class="option-row"><span><strong>消息分隔线</strong><small>提升长对话的可读性</small></span><input id="includeSeparators" type="checkbox" class="switch" checked></label>
+        <label id="themeRow" class="option-row" hidden><span><strong>HTML 主题</strong><small>打开文件时的颜色模式</small></span>
+          <select id="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
+        </label>
+      </fieldset>
+
+      <section class="section filename-section">
+        <label for="filename">文件名</label>
+        <input id="filename" type="text" autocomplete="off" spellcheck="false">
+      </section>
+
+      <details id="previewPanel" class="preview-panel">
+        <summary>内容预览</summary>
+        <pre id="previewContent"></pre>
+      </details>
+
+      <p id="actionStatus" class="action-status" role="status" aria-live="polite"></p>
+
+      <div class="actions">
+        <button id="copyButton" class="button button-secondary" type="button">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path d="M8 8h11v11H8zM5 16H4V5h11v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          复制
+        </button>
+        <button id="exportButton" class="button button-primary" type="submit">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          导出文件
+        </button>
+      </div>
+      <p class="shortcut">快捷导出 Markdown：<kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd></p>
+    </form>
+  </main>
+  <script src="src/export-core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

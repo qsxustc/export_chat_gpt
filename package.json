@@ -1,0 +1,13 @@
+{
+  "name": "chatgpt-enhanced-exporter",
+  "version": "0.2.0",
+  "private": true,
+  "description": "A dependency-free Manifest V3 extension for exporting ChatGPT conversations.",
+  "scripts": {
+    "check": "node --check src/export-core.js && node --check src/content.js && node --check src/background.js && node --check popup.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
