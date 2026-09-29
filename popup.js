@@ -54,14 +54,14 @@
   async function ensureContentScript() {
     try {
       const response = await sendToTab({ type: "PING" });
-      if (response?.ok) return;
+      if (response?.ok && response.assistant) return;
     } catch {
       // Existing tabs do not receive new content scripts until refreshed, so inject now.
     }
 
     await chrome.scripting.executeScript({
       target: { tabId: state.tab.id },
-      files: ["src/export-core.js", "src/content.js"]
+      files: ["src/export-core.js", "src/assistant-core.js", "src/content.js", "src/assistant-drafts.js", "src/assistant-ui.js", "src/assistant-page.js"]
     });
   }
 
@@ -285,6 +285,7 @@
 
   async function initialize() {
     elements.loading.hidden = false;
+    document.getElementById("emptyConversation").hidden = true;
     elements.errorState.hidden = true;
     elements.form.hidden = true;
 
@@ -301,7 +302,9 @@
       });
       if (!response?.ok) throw new Error(response?.error || "页面内容读取失败");
       if (!response.snapshot?.messages?.length) {
-        throw new Error("没有检测到对话消息。请打开具体会话，并等待回复加载完成。");
+        elements.loading.hidden = true;
+        document.getElementById("emptyConversation").hidden = false;
+        return;
       }
 
       state.snapshot = response.snapshot;
@@ -347,6 +350,26 @@
   elements.copyButton.addEventListener("click", handleCopy);
   elements.form.addEventListener("submit", handleExport);
   elements.retryButton.addEventListener("click", initialize);
+
+  async function openAssistant(tab, control) {
+    control.disabled = true;
+    try {
+      [state.tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!state.tab?.id || !isSupportedUrl(state.tab.url)) throw new Error("请先打开 ChatGPT 网页，或点击“模板与收藏管理”。");
+      await ensureContentScript();
+      const response = await sendToTab({ type: "OPEN_ASSISTANT", tab });
+      if (!response?.ok) throw new Error(response?.error || "无法打开面板，请刷新 ChatGPT 页面");
+      window.close();
+    } catch (error) { showError(error.message); }
+    finally { control.disabled = false; }
+  }
+  document.getElementById("openAssistantButton").addEventListener("click", (event) => openAssistant(undefined, event.currentTarget));
+  document.querySelectorAll("[data-assistant-tab]").forEach((control) => {
+    control.addEventListener("click", () => openAssistant(control.dataset.assistantTab, control));
+  });
+  document.getElementById("openOptionsButton").addEventListener("click", () => {
+    chrome.runtime.openOptionsPage().catch((error) => showError(error.message));
+  });
 
   initialize();
 })();

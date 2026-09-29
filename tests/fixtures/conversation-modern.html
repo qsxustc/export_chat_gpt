@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>新版页面结构测试 - ChatGPT</title></head>
+<body>
+  <nav><a href="/c/modern-fixture">新版页面结构测试</a></nav>
+  <main class="MainContentSurface-hidden" style="width:0;height:0;overflow:hidden">
+    <div data-turn-key="synthetic-turn">
+      <div data-content-search-turn-key="synthetic-turn">
+        <div data-content-search-unit-key="synthetic-turn:0:user" data-chatgpt-search-message-ids='["synthetic-user"]'>
+          <div class="text-size-chat whitespace-pre-wrap">隐藏副本中的问题</div>
+        </div>
+        <div data-content-search-unit-key="synthetic-turn:2:assistant" data-chatgpt-search-message-ids='["synthetic-assistant"]'>
+          <div data-markdown-text-style="assistant-message"><p>隐藏副本中的回答</p></div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <main class="MainContentSurface-visible" style="width:640px;min-height:500px">
+    <div data-turn-key="synthetic-turn">
+      <div data-content-search-turn-key="synthetic-turn">
+        <div data-content-search-unit-key="synthetic-turn:0:user" data-chatgpt-search-message-ids='["synthetic-user"]'>
+          <div class="text-size-chat whitespace-pre-wrap">合成问题：请给出示例。</div>
+        </div>
+        <div data-content-search-unit-key="synthetic-turn:2:assistant" data-chatgpt-search-message-ids='["synthetic-assistant"]'>
+          <div data-markdown-text-style="assistant-message">
+            <p>合成回答：这是一个示例。</p>
+            <pre><code class="language-js">const answer = 2;</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <form><div id="prompt-textarea" contenteditable="true" role="textbox">输入框中的未发送内容</div></form>
+  </main>
+</body>
+</html>

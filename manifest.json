@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT 对话增强导出",
-  "version": "0.2.1",
-  "description": "将当前 ChatGPT 对话按范围或逐条选择后导出为 Markdown 或独立 HTML 文件。",
+  "name": "ChatGPT 使用增强助手",
+  "version": "0.3.2",
+  "description": "对话目录、搜索、提示词模板、划词追问、阅读设置、消息收藏与 Markdown / HTML 导出。资料本地保存。",
   "permissions": [
     "activeTab",
     "clipboardWrite",
@@ -15,7 +15,7 @@
     "https://chat.openai.com/*"
   ],
   "action": {
-    "default_title": "导出 ChatGPT 对话",
+    "default_title": "ChatGPT 使用助手与导出",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -35,7 +35,11 @@
       ],
       "js": [
         "src/export-core.js",
-        "src/content.js"
+        "src/assistant-core.js",
+        "src/content.js",
+        "src/assistant-drafts.js",
+        "src/assistant-ui.js",
+        "src/assistant-page.js"
       ],
       "run_at": "document_idle"
     }
@@ -54,5 +58,9 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   }
 }

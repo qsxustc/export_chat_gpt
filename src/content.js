@@ -22,11 +22,9 @@
     "button", "input", "textarea", "select", "option", "svg", "canvas",
     "video", "audio", "[contenteditable='true']", "[data-testid*='copy']",
     "[aria-label*='Copy']", "[aria-label*='copy']", ".sr-only",
-    ".chatgpt-exporter-message-toggle", "#chatgpt-exporter-page-button"
+    ".chatgpt-exporter-message-toggle", "#chatgpt-exporter-page-button", "[data-assistant-ui]"
   ].join(",");
 
-  const PAGE_BUTTON_ID = "chatgpt-exporter-page-button";
-  const PAGE_BUTTON_STYLE_ID = "chatgpt-exporter-page-button-style";
   const SELECTION_STYLE_ID = "chatgpt-exporter-selection-style";
   const SELECTION_TOOLBAR_ID = "chatgpt-exporter-selection-toolbar";
   const SELECTION_CONTROL_CLASS = "chatgpt-exporter-message-toggle";
@@ -34,6 +32,8 @@
   const SELECTION_SELECTED_CLASS = "chatgpt-exporter-select-turn-selected";
   let activeMessageSelection = null;
   let completedMessageSelection = null;
+  let selectionContinuation = null;
+  let selectionContinuationTimer = 0;
 
   function absoluteUrl(value, allowInlineImage = false) {
     if (!value) return "";
@@ -373,25 +373,57 @@
   }
 
   function getRoleNodes() {
-    const articles = [...document.querySelectorAll("article")];
-    const fromArticles = articles
-      .map((article) => article.querySelector("[data-message-author-role]"))
-      .filter(Boolean);
-    const nodes = fromArticles.length
-      ? fromArticles
-      : [...document.querySelectorAll("main [data-message-author-role]")];
-    return [...new Set(nodes)];
+    // The current site renders a hidden copy of the conversation alongside the
+    // visible one. Read only visible main surfaces, and deduplicate by unit key.
+    const units = new Map();
+    for (const unit of document.querySelectorAll("main [data-content-search-unit-key]")) {
+      const main = unit.closest("main");
+      const rect = main?.getBoundingClientRect();
+      const key = unit.getAttribute("data-content-search-unit-key") || "";
+      if (!rect?.width || !rect.height || !/:(?:user|assistant)$/.test(key) || units.has(key)) continue;
+      const role = key.slice(key.lastIndexOf(":") + 1);
+      const content = unit.querySelector(`[data-message-author-role="${role}"]`)
+        || (role === "assistant"
+          ? unit.querySelector("[data-chatgpt-selection-message-id], [data-markdown-text-style='assistant-message']")
+          : unit.querySelector(".whitespace-pre-wrap"))
+        || unit;
+      units.set(key, content);
+    }
+    if (units.size) return [...units.values()];
+
+    // The previous layout used section[data-turn] shells. Some image replies
+    // did not expose data-message-author-role inside their shell.
+    const turns = [...document.querySelectorAll('main section[data-turn="user"],main section[data-turn="assistant"]')];
+    if (turns.length) return turns.map((turn) => {
+      const role = turn.getAttribute("data-turn");
+      return turn.querySelector(`[data-message-author-role="${role}"]`)
+        || turn.querySelector(role === "user" ? ".whitespace-pre-wrap" : ".markdown")
+        || turn;
+    });
+
+    // Keep support for older layouts, including turns rendered as articles
+    // outside a main surface.
+    const legacy = [...document.querySelectorAll("main [data-message-author-role]")];
+    return [...new Set(legacy.length ? legacy : document.querySelectorAll("article [data-message-author-role]"))];
   }
 
   function getTurnNode(roleNode) {
-    return roleNode.closest("article")
+    return roleNode.closest("[data-content-search-unit-key]")
+      || roleNode.closest('section[data-turn="user"],section[data-turn="assistant"]')
+      || roleNode.closest("article")
       || roleNode.closest('[data-testid^="conversation-turn-"]')
       || roleNode;
   }
 
   function getMessageId(roleNode, turn, offset) {
+    const searchIds = turn?.getAttribute("data-chatgpt-search-message-ids") || "";
+    const visibleMessageId = roleNode.getAttribute("data-chatgpt-selection-message-id")
+      || turn?.querySelector("[data-chatgpt-selection-message-id]")?.getAttribute("data-chatgpt-selection-message-id")
+      || searchIds.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
     return roleNode.getAttribute("data-message-id")
       || turn?.getAttribute("data-message-id")
+      || visibleMessageId
+      || turn?.getAttribute("data-content-search-unit-key")
       || turn?.getAttribute("data-testid")
       || `message-${offset + 1}`;
   }
@@ -402,7 +434,8 @@
       return {
         index: offset + 1,
         id: getMessageId(roleNode, turn, offset),
-        role: roleNode.getAttribute("data-message-author-role") || "assistant",
+        role: (turn.getAttribute("data-content-search-unit-key") || "").match(/:(user|assistant)$/)?.[1]
+          || turn.getAttribute("data-turn") || roleNode.getAttribute("data-message-author-role") || "assistant",
         roleNode,
         turn
       };
@@ -437,6 +470,8 @@
   }
 
   function clearCompletedMessageSelection() {
+    clearInterval(selectionContinuationTimer); selectionContinuationTimer = 0;
+    selectionContinuation?.remove(); selectionContinuation = null;
     completedMessageSelection = null;
   }
 
@@ -523,7 +558,40 @@
       messageIds
     };
     cleanupActiveMessageSelection();
-    showToast(`已选择 ${messageIds.length} 条消息，请再次点击扩展图标继续导出`);
+    showSelectionContinuation(messageIds);
+  }
+
+  function showSelectionContinuation(messageIds) {
+    selectionContinuation?.remove();
+    const host = document.createElement("chatgpt-export-continuation");
+    host.setAttribute("data-assistant-ui", "export-continuation");
+    const root = host.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = ":host{position:fixed;right:18px;top:80px;z-index:2147483646;font:13px/1.5 system-ui,sans-serif;color:#173e2c;background:#f3fbf6;border:1px solid #aad0ba;border-radius:12px;padding:14px;box-shadow:0 8px 30px #1233;max-width:min(360px,calc(100vw - 36px))}p{margin:0 0 8px}button{font:inherit;padding:6px 10px;border:1px solid #aad0ba;border-radius:7px;background:white;color:#087f5b;cursor:pointer;margin-right:7px}button:focus-visible{outline:2px solid #087f5b}button:disabled{opacity:.5}";
+    const text = document.createElement("p"); text.setAttribute("role", "status");
+    text.textContent = `已选择 ${messageIds.length} 条消息，正在打开导出设置…`;
+    const next = document.createElement("button"); next.type = "button"; next.textContent = "继续导出";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消选择";
+    const snapshot = completedMessageSelection;
+    async function openExport() {
+      if (snapshot !== completedMessageSelection || snapshot.conversationKey !== conversationKey()) { clearCompletedMessageSelection(); return; }
+      next.disabled = true;
+      try {
+        const response = await chrome.runtime.sendMessage({ type: "OPEN_EXPORT_POPUP" });
+        if (!response?.ok) throw new Error("popup unavailable");
+        text.textContent = `已选择 ${messageIds.length} 条消息，请在弹窗中完成导出。`;
+      } catch {
+        text.textContent = `已保留 ${messageIds.length} 条选择。点击“继续导出”，或点击浏览器工具栏的扩展图标。`;
+      } finally { next.disabled = false; }
+    }
+    next.addEventListener("click", openExport);
+    cancel.addEventListener("click", clearCompletedMessageSelection);
+    root.append(style, text, next, cancel); document.documentElement.append(host); selectionContinuation = host;
+    clearInterval(selectionContinuationTimer);
+    selectionContinuationTimer = setInterval(() => {
+      if (snapshot.conversationKey !== conversationKey()) clearCompletedMessageSelection();
+    }, 350);
+    openExport();
   }
 
   function cancelMessageSelection() {
@@ -533,6 +601,7 @@
   }
 
   function startMessageSelection(initialMessageIds = []) {
+    globalThis.ChatGPTAssistantPage?.open(false);
     cleanupActiveMessageSelection();
     clearCompletedMessageSelection();
     const entries = getMessageEntries();
@@ -552,15 +621,26 @@
     const toolbar = document.createElement("aside");
     toolbar.id = SELECTION_TOOLBAR_ID;
     toolbar.setAttribute("aria-label", "消息选择工具栏");
-    toolbar.innerHTML = `
-      <header><strong>选择要导出的消息</strong><output aria-live="polite">已选 0 条</output></header>
-      <div class="chatgpt-exporter-selection-actions">
-        <button type="button" data-action="all">全选</button>
-        <button type="button" data-action="invert">反选</button>
-        <button type="button" data-action="none">清空</button>
-        <button type="button" data-action="cancel">取消</button>
-        <button type="button" data-action="done">完成选择</button>
-      </div>`;
+    const heading = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = "选择要导出的消息";
+    const count = document.createElement("output");
+    count.setAttribute("aria-live", "polite");
+    count.textContent = "已选 0 条";
+    heading.append(title, count);
+    const actions = document.createElement("div");
+    actions.className = "chatgpt-exporter-selection-actions";
+    for (const [action, label] of [
+      ["all", "全选"], ["invert", "反选"], ["none", "清空"],
+      ["cancel", "取消"], ["done", "完成选择"]
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.action = action;
+      button.textContent = label;
+      actions.append(button);
+    }
+    toolbar.append(heading, actions);
     document.documentElement.appendChild(toolbar);
 
     const controls = entries.map((entry) => {
@@ -635,60 +715,6 @@
     return { count: entries.length, selectedCount: selectedIds.size };
   }
 
-  function installPageExportButton() {
-    if (document.getElementById(PAGE_BUTTON_ID)) return;
-
-    const style = document.createElement("style");
-    style.id = PAGE_BUTTON_STYLE_ID;
-    style.textContent = `
-      #${PAGE_BUTTON_ID} { position:fixed !important; z-index:2147483644 !important; top:68px !important; right:18px !important; display:inline-flex !important; align-items:center !important; justify-content:center !important; gap:7px !important; min-width:74px !important; min-height:38px !important; margin:0 !important; padding:8px 12px !important; border:1px solid rgba(8,127,91,.32) !important; border-radius:11px !important; background:rgba(255,255,255,.96) !important; color:#087f5b !important; box-shadow:0 7px 24px rgba(0,0,0,.14) !important; backdrop-filter:blur(12px) !important; font:750 13px/1 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif !important; cursor:pointer !important; user-select:none !important; -webkit-user-select:none !important; transition:transform .12s ease,box-shadow .12s ease,background .12s ease !important; }
-      #${PAGE_BUTTON_ID}[hidden] { display:none !important; }
-      #${PAGE_BUTTON_ID}:hover { transform:translateY(-1px) !important; background:#ecf8f3 !important; box-shadow:0 9px 28px rgba(0,0,0,.17) !important; }
-      #${PAGE_BUTTON_ID}:focus-visible { outline:3px solid rgba(16,163,127,.3) !important; outline-offset:2px !important; }
-      #${PAGE_BUTTON_ID}:disabled { cursor:wait !important; opacity:.65 !important; transform:none !important; }
-      #${PAGE_BUTTON_ID} svg { display:block !important; width:17px !important; height:17px !important; flex:0 0 auto !important; }
-      @media (prefers-color-scheme:dark) { #${PAGE_BUTTON_ID} { border-color:rgba(25,195,125,.45) !important; background:rgba(33,33,33,.94) !important; color:#6ee7b7 !important; } #${PAGE_BUTTON_ID}:hover { background:#183c32 !important; } }
-      @media (max-width:700px) { #${PAGE_BUTTON_ID} { top:60px !important; right:10px !important; min-width:40px !important; width:40px !important; height:40px !important; padding:0 !important; border-radius:50% !important; } #${PAGE_BUTTON_ID} span { display:none !important; } }
-      @media (prefers-reduced-motion:reduce) { #${PAGE_BUTTON_ID} { transition:none !important; } }
-    `;
-    (document.head || document.documentElement).appendChild(style);
-
-    const button = document.createElement("button");
-    button.id = PAGE_BUTTON_ID;
-    button.type = "button";
-    button.hidden = true;
-    button.title = "打开 ChatGPT 对话导出";
-    button.setAttribute("aria-label", button.title);
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>导出</span>`;
-    document.documentElement.appendChild(button);
-
-    let visibilityTimer = 0;
-    const updateVisibility = () => {
-      window.clearTimeout(visibilityTimer);
-      visibilityTimer = window.setTimeout(() => {
-        button.hidden = getRoleNodes().length === 0;
-      }, 120);
-    };
-    const observer = new MutationObserver(updateVisibility);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    updateVisibility();
-
-    button.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      button.disabled = true;
-      try {
-        const response = await chrome.runtime.sendMessage({ type: "OPEN_EXPORT_POPUP" });
-        if (!response?.ok) throw new Error(response?.error || "无法打开导出弹窗");
-      } catch (error) {
-        console.error("[ChatGPT Exporter] 无法打开弹窗", error);
-        showToast("无法打开导出弹窗，请点击浏览器工具栏中的扩展图标", true);
-      } finally {
-        button.disabled = false;
-      }
-    });
-  }
-
   function downloadText(content, filename, mimeType) {
     const blob = new Blob(["\ufeff", content], { type: `${mimeType};charset=utf-8` });
     const url = URL.createObjectURL(blob);
@@ -723,12 +749,12 @@
     window.setTimeout(() => toast.remove(), 2600);
   }
 
-  installPageExportButton();
+  globalThis.ChatGPTExporterPage = { getMessageEntries, cleanClone, domToMarkdown, getTitle, conversationKey, extractSnapshot };
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     try {
       if (request?.type === "PING") {
-        sendResponse({ ok: true, title: getTitle(), messageCount: getRoleNodes().length });
+        sendResponse({ ok: true, title: getTitle(), messageCount: getRoleNodes().length, assistant: !!globalThis.__chatGPTAssistantLoaded });
         return;
       }
 

@@ -1,5 +1,7 @@
 "use strict";
 
+importScripts("assistant-core.js", "assistant-store.js");
+
 const CHATGPT_URL = /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i;
 
 function createMenus() {
@@ -55,14 +57,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 async function ensureContentScript(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: "PING" });
-    if (response?.ok) return;
+    if (response?.ok && response.assistant) return;
   } catch {
     // The extension may have just been installed while the ChatGPT tab was open.
   }
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["src/export-core.js", "src/content.js"]
+    files: ["src/export-core.js", "src/assistant-core.js", "src/content.js", "src/assistant-drafts.js", "src/assistant-ui.js", "src/assistant-page.js"]
   });
 }
 

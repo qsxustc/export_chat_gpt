@@ -1,0 +1,7 @@
+:root { color-scheme:light dark; font:15px/1.6 system-ui,sans-serif; color:#233e31; background:#eef4f0; }
+body { max-width:920px; margin:0 auto; padding:40px 24px; }
+.intro { margin-bottom:28px; } .intro span { color:#087f5b; font-size:11px; letter-spacing:2px; font-weight:700; }
+h1 { font-size:28px; font-weight:650; margin:10px 0; } .intro p { color:#667970; margin:0; }
+#assistant-options { height:calc(100vh - 215px); min-height:500px; }
+@media(prefers-color-scheme:dark) { :root { color:#e0eee4; background:#152019; } .intro span { color:#84d9b1; } .intro p { color:#acbdb0; } }
+@media(max-width:600px) { body { padding:20px 12px; } h1 { font-size:23px; } }

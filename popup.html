@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ChatGPT 对话导出</title>
+  <title>ChatGPT 使用助手</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -13,11 +13,24 @@
         <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
       <div>
-        <h1>对话增强导出</h1>
-        <p>ChatGPT Exporter</p>
+        <h1>ChatGPT 使用助手</h1>
+        <p>LOCAL COMPANION</p>
       </div>
-      <span class="version">v0.2.1</span>
+      <span class="version">v0.3.1</span>
     </header>
+
+    <section class="assistant-shortcuts" aria-label="助手功能">
+      <button id="openAssistantButton" class="button button-primary" type="button">打开增强面板</button>
+      <button id="openOptionsButton" class="button button-secondary" type="button">模板与收藏管理</button>
+    </section>
+    <div class="quick-access" aria-label="常用功能直达">
+      <button type="button" data-assistant-tab="templates">提示词模板</button>
+      <button type="button" data-assistant-tab="search">搜索对话</button>
+      <button type="button" data-assistant-tab="favorites">我的收藏</button>
+    </div>
+    <section id="emptyConversation" class="state-card" hidden>
+      <div><strong>从一个好问题开始</strong><p>新对话可以先使用提示词模板、提问辅助和阅读设置。有消息后即可导出。</p></div>
+    </section>
 
     <section id="loading" class="state-card" aria-live="polite">
       <span class="spinner" aria-hidden="true"></span>
@@ -76,9 +89,11 @@
           <button id="clearPageSelectionButton" class="selection-clear-button" type="button" hidden>恢复范围</button>
         </div>
         <p id="pageSelectionStatus" class="page-selection-status" hidden></p>
-        <p class="page-selection-help">可勾选第 1、3、8 条等不连续消息；选择完成后重新打开扩展。</p>
+        <p class="page-selection-help">可勾选第 1、3、8 条等不连续消息；完成后自动返回导出设置。</p>
       </fieldset>
 
+      <details class="advanced-options">
+        <summary>排版与文件名</summary>
       <fieldset class="section options-section">
         <legend>内容选项</legend>
         <label class="option-row"><span><strong>角色标题</strong><small>区分用户与 ChatGPT 内容</small></span><input id="includeRoleLabels" type="checkbox" class="switch" checked></label>
@@ -93,6 +108,7 @@
         <label for="filename">文件名</label>
         <input id="filename" type="text" autocomplete="off" spellcheck="false">
       </section>
+      </details>
 
       <details id="previewPanel" class="preview-panel">
         <summary>内容预览</summary>

@@ -38,7 +38,7 @@ function loadBackground(overrides = {}) {
   };
 
   Object.assign(chrome.action, overrides.action);
-  vm.runInNewContext(backgroundSource, { chrome, console, Promise }, {
+  vm.runInNewContext(backgroundSource, { chrome, console, Promise, importScripts() {} }, {
     filename: "src/background.js"
   });
   return { listeners, calls };
