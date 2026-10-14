@@ -1,6 +1,11 @@
 (function initPopup() {
   "use strict";
 
+  const version = chrome.runtime.getManifest().version;
+  const versionLabel = document.querySelector(".version");
+  versionLabel.textContent = `v${version}`;
+  versionLabel.hidden = false;
+
   const core = globalThis.ChatGPTExporterCore;
   const state = {
     tab: null,

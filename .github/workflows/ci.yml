@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Check and package (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run check
+      - run: npm test
+      - run: npm run package
+      - run: npm run check:package
+      - run: unzip -t dist/*.zip
+      - uses: actions/upload-artifact@v4
+        if: matrix.node == 22
+        with:
+          name: extension
+          path: dist/chatgpt-enhanced-exporter-*.zip
+          if-no-files-found: error
+
+  browser:
+    name: Chromium fixture tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run test:browser
+        env:
+          BROWSER_ARTIFACT_DIR: test-results/browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-screenshots
+          path: test-results/browser/
+          if-no-files-found: ignore

@@ -3,12 +3,24 @@
   "version": "0.3.2",
   "private": true,
   "description": "A local-first ChatGPT assistant with conversation navigation, reusable prompts, bookmarks and export.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qsxustc/export_chat_gpt.git"
+  },
+  "homepage": "https://github.com/qsxustc/export_chat_gpt#readme",
+  "bugs": {
+    "url": "https://github.com/qsxustc/export_chat_gpt/issues"
+  },
+  "keywords": ["chatgpt", "chrome-extension", "markdown", "local-first"],
   "scripts": {
-    "check": "node --check src/export-core.js && node --check src/content.js && node --check src/background.js && node --check src/assistant-drafts.js && node --check src/assistant-core.js && node --check src/assistant-store.js && node --check src/assistant-ui.js && node --check src/assistant-page.js && node --check options.js && node --check popup.js",
+    "check": "node scripts/check.mjs",
     "test": "node --test tests/*.test.js",
-    "test:browser": "node tests/browser.integration.js"
+    "test:browser": "node tests/browser.integration.js",
+    "package": "node scripts/package.mjs",
+    "check:package": "node scripts/package.mjs --check"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

@@ -5,15 +5,51 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const assert = require("node:assert/strict");
+
+function findChrome() {
+  const names = process.platform === "win32"
+    ? ["chrome.exe", "chromium.exe"]
+    : ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"];
+  const candidates = process.env.CHROME_PATH ? [process.env.CHROME_PATH] : [
+    ...(process.platform === "darwin" ? [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ] : []),
+    ...(process.platform === "win32" ? [
+      process.env.PROGRAMFILES,
+      process.env["PROGRAMFILES(X86)"],
+      process.env.LOCALAPPDATA,
+    ].filter(Boolean).map((directory) => path.join(directory, "Google", "Chrome", "Application", "chrome.exe")) : []),
+    ...names,
+  ];
+  for (const candidate of candidates) {
+    const locations = path.isAbsolute(candidate) || /[\\/]/.test(candidate)
+      ? [path.resolve(candidate)]
+      : (process.env.PATH || "").split(path.delimiter).filter(Boolean).map((directory) => path.join(directory, candidate));
+    for (const location of locations) {
+      try {
+        fs.accessSync(location, process.platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+        if (fs.statSync(location).isFile()) return location;
+      } catch { /* Try the next installed browser. */ }
+    }
+  }
+  throw new Error("Chrome or Chromium was not found. Install a recent version, or set CHROME_PATH to its executable.");
+}
+
 (async function main() {
-if (typeof WebSocket === "undefined") throw new Error("Browser tests require Node.js 22 or newer (native WebSocket). ");
+if (typeof WebSocket === "undefined") throw new Error("Browser tests require Node.js 22 or newer (native WebSocket).");
 const root = path.resolve(__dirname, "..");
-const chromePath = process.env.CHROME_PATH || (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "chromium");
+const chromePath = findChrome();
+const artifactDirectory = process.env.BROWSER_ARTIFACT_DIR
+  ? path.resolve(process.env.BROWSER_ARTIFACT_DIR)
+  : path.join(os.tmpdir(), "chatgpt-assistant-browser-artifacts");
+fs.mkdirSync(artifactDirectory, { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "chatgpt-assistant-browser-"));
-const browser = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1440,1000", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+const browser = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-dev-shm-usage", ...(process.env.CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1440,1000", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 let browserError = "", socket, sequence = 0;
+let launchError;
 browser.stderr.on("data", (chunk) => { browserError += chunk.toString(); });
-browser.on("error", (error) => { browserError += error.message; });
+browser.on("error", (error) => { launchError = error; });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pending = new Map(), listeners = new Map();
 function send(method, params = {}) {
@@ -42,10 +78,12 @@ window.__runtimeErrors=[];window.popupOpenRequests=0;window.blockPopup=false;win
 window.chrome={runtime:{id:'fixture',onMessage:{addListener(fn){messageListeners.push(fn)},removeListener(fn){const i=messageListeners.indexOf(fn);if(i>=0)messageListeners.splice(i,1)}},async openOptionsPage(){},sendMessage(request){return new Promise((resolve,reject)=>{let handled=false;for(const fn of messageListeners){const keep=fn(request,{id:'fixture',tab:{id:1}},resolve);if(keep)handled=true;}if(request.type==='OPEN_EXPORT_POPUP'){popupOpenRequests++;resolve({ok:!blockPopup});}else if(request.type==='OPEN_ASSISTANT_OPTIONS')resolve({ok:true});else if(!handled && !['PING','EXTRACT_CONVERSATION','QUICK_EXPORT','START_MESSAGE_SELECTION','CLEAR_MESSAGE_SELECTION','DOWNLOAD_EXPORT'].includes(request.type))reject(new Error('Unhandled message '+request.type));});}},storage:{session:{async get(key){return {[key]:sessionStorage.getItem(key)}},async set(value){for(const [key,item] of Object.entries(value))sessionStorage.setItem(key,item)}},onChanged:{addListener(fn){storageListeners.push(fn)},removeListener(fn){const i=storageListeners.indexOf(fn);if(i>=0)storageListeners.splice(i,1)}},local:{async get(key){return Object.fromEntries((Array.isArray(key)?key:[key]).map(k=>[k,structuredClone(store[k])]))},async set(value){if(window.fixtureFailWrite){window.fixtureFailWrite=false;throw new Error('QUOTA_BYTES quota exceeded')}if(window.fixtureWriteDelay)await new Promise(resolve=>setTimeout(resolve,fixtureWriteDelay));const changes={};for(const key of Object.keys(value))changes[key]={oldValue:store[key],newValue:value[key]};Object.assign(store,structuredClone(value));localStorage.setItem('fixture-storage',JSON.stringify(store));for(const fn of storageListeners)fn(changes,'local');}}}};
 `;
 const scripts = ["src/export-core.js", "src/assistant-core.js", "src/assistant-store.js", "src/content.js", "src/assistant-drafts.js", "src/assistant-ui.js", "src/assistant-page.js"];
-let fixtureHtml = source("tests/fixtures/conversation.html");
+let fixtureHtml;
 try {
+  fixtureHtml = source("tests/fixtures/conversation.html");
   const activeFile = path.join(profile, "DevToolsActivePort");
   for (let i = 0; i < 150 && !fs.existsSync(activeFile); i++) {
+    if (launchError) throw new Error(`Could not launch Chrome at ${chromePath}: ${launchError.message}`);
     if ((browser.exitCode !== null || browser.signalCode !== null)) throw new Error(`Chrome exited: ${browserError.slice(-2000)}`);
     await sleep(50);
   }
@@ -231,7 +269,7 @@ try {
   await evaluate("document.querySelector('#messages').innerHTML='<article><div data-message-author-role=\"user\" data-message-id=\"preview-u1\">请解释动态规划，并给出学习建议。</div></article><article><div data-message-author-role=\"assistant\" data-message-id=\"preview-a1\"><p>动态规划把复杂问题分解为相互关联的子问题，并复用已经得到的结果。</p><p>学习时，可以从三个问题入手：状态是什么？状态之间如何转移？边界条件是什么？</p></div></article><article><div data-message-author-role=\"user\" data-message-id=\"preview-u2\">如何检查代码的边界条件？</div></article><article><div data-message-author-role=\"assistant\" data-message-id=\"preview-a2\"><p>先从空输入、单个元素、最大规模和重复值开始。为每种情况写出预期结果，再检查代码是否满足。</p><p>你可以把常用检查清单保存为模板，或收藏这一条回答。</p></div></article>';history.pushState({},'','/c/preview');[...app.querySelectorAll('nav button')].find(n=>n.textContent==='目录').click();window.scrollTo(0,0);");
   await waitFor("ChatGPTAssistantPage.entries().length === 4");
   const screenshot = await send("Page.captureScreenshot", { format: "png" });
-  const screenshotPath = path.join(os.tmpdir(), "chatgpt-assistant-p0.png");
+  const screenshotPath = path.join(artifactDirectory, "desktop.png");
   fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
   await send("Emulation.setDeviceMetricsOverride", { width: 760, height: 980, deviceScaleFactor: 1, mobile: false });
   await sleep(100);
@@ -239,7 +277,7 @@ try {
   await evaluate("document.documentElement.className='dark';");
   await sleep(50);
   assert.equal(await evaluate("app.dataset.theme"), "dark");
-  const narrowShot=await send("Page.captureScreenshot",{format:"png"});fs.writeFileSync(path.join(os.tmpdir(),"chatgpt-assistant-p0-narrow.png"),Buffer.from(narrowShot.data,"base64"));
+  const narrowShot=await send("Page.captureScreenshot",{format:"png"});fs.writeFileSync(path.join(artifactDirectory,"narrow.png"),Buffer.from(narrowShot.data,"base64"));
   await evaluate("app.querySelector('#outline-list button').click();");
   await waitFor("ChatGPTAssistantPage.root.querySelector('.panel').hidden");
   assert.equal(await evaluate("!!document.querySelector('[data-cgpt-highlight]')"), true);
@@ -286,9 +324,13 @@ try {
   await send("Page.navigate", { url: "https://chatgpt.com/popup-fixture" });
   await waitFor("!!document.getElementById('openAssistantButton')");
   await evaluate("window.popupFixtureMessages=[];window.openedOptions=0;window.openedAssistantTabs=[];window.closedPopup=0;window.close=()=>closedPopup++;window.chrome.tabs={query:async()=>[{id:1,url:'https://chatgpt.com/'}],sendMessage:async(_id,request)=>{if(request.type==='OPEN_ASSISTANT'){openedAssistantTabs.push(request.tab);return {ok:true}}return request.type==='PING'?{ok:true,assistant:true}:{ok:true,snapshot:{title:'测试会话',url:'https://chatgpt.com/c/test',exportedAt:'2026-09-21T00:00:00Z',messages:popupFixtureMessages}}}};chrome.runtime.openOptionsPage=async()=>{openedOptions+=1};");
+  const manifestVersion = JSON.parse(source("manifest.json")).version;
+  await evaluate(`chrome.runtime.getManifest=()=>({version:${JSON.stringify(manifestVersion)}});`);
   await evaluate(source("src/export-core.js"));
   await evaluate(source("popup.js"));
   await waitFor("document.getElementById('emptyConversation').hidden === false");
+  assert.equal(await evaluate("document.querySelector('.version').textContent"), `v${manifestVersion}`);
+  assert.equal(await evaluate("document.querySelector('.version').hidden"), false);
   assert.equal(await evaluate("document.getElementById('errorState').hidden"), true);
   await evaluate("document.getElementById('openOptionsButton').click();");
   await waitFor("openedOptions === 1");
@@ -305,14 +347,18 @@ try {
   await send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 1, mobile: false });
   assert.equal(await evaluate("document.querySelector('#exportButton').getBoundingClientRect().bottom <= innerHeight"), true);
   const popupShot = await send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), "chatgpt-assistant-ux-popup.png"), Buffer.from(popupShot.data, "base64"));
+  fs.writeFileSync(path.join(artifactDirectory, "popup.png"), Buffer.from(popupShot.data, "base64"));
   console.log("PASS popup empty state, options access and existing export form");
-  console.log(`Screenshot: ${screenshotPath}`);
-  console.log("All browser fixture checks passed (real Chromium; mocked extension storage and messages). ");
+  console.log(`Screenshots: ${artifactDirectory}`);
+  console.log("All browser fixture checks passed (real Chromium; mocked extension storage and messages).");
 } finally {
   if (socket) socket.close();
   browser.kill("SIGTERM");
-  await new Promise((resolve) => { if ((browser.exitCode !== null || browser.signalCode !== null)) resolve(); else { browser.once("exit", resolve); setTimeout(() => { browser.kill("SIGKILL"); resolve(); }, 2000); } });
+  await new Promise((resolve) => {
+    if (launchError || browser.exitCode !== null || browser.signalCode !== null) return resolve();
+    const timer = setTimeout(() => { browser.kill("SIGKILL"); resolve(); }, 2000);
+    browser.once("exit", () => { clearTimeout(timer); resolve(); });
+  });
   fs.rmSync(profile, { recursive: true, force: true });
 }
 
