@@ -82,12 +82,14 @@ let fixtureHtml;
 try {
   fixtureHtml = source("tests/fixtures/conversation.html");
   const activeFile = path.join(profile, "DevToolsActivePort");
-  for (let i = 0; i < 150 && !fs.existsSync(activeFile); i++) {
+  const startupStarted = performance.now();
+  const startupTimeoutMs = 30_000;
+  while (!fs.existsSync(activeFile) && performance.now() - startupStarted < startupTimeoutMs) {
     if (launchError) throw new Error(`Could not launch Chrome at ${chromePath}: ${launchError.message}`);
     if ((browser.exitCode !== null || browser.signalCode !== null)) throw new Error(`Chrome exited: ${browserError.slice(-2000)}`);
     await sleep(50);
   }
-  if (!fs.existsSync(activeFile)) throw new Error(`Chrome did not start: ${browserError.slice(-2000)}`);
+  if (!fs.existsSync(activeFile)) throw new Error(`Chrome at ${chromePath} did not start after ${Math.round(performance.now() - startupStarted)} ms (timeout: ${startupTimeoutMs} ms): ${browserError.slice(-2000)}`);
   const port = fs.readFileSync(activeFile, "utf8").split("\n")[0];
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
   socket = new WebSocket(targets.find((item) => item.type === "page").webSocketDebuggerUrl);
