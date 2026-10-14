@@ -359,7 +359,8 @@ try {
     const timer = setTimeout(() => { browser.kill("SIGKILL"); resolve(); }, 2000);
     browser.once("exit", () => { clearTimeout(timer); resolve(); });
   });
-  fs.rmSync(profile, { recursive: true, force: true });
+  // Chrome subprocesses can still write the profile briefly after the main process exits.
+  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
 })().catch((error) => { console.error(error); process.exitCode = 1; });
