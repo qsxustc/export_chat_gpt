@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const assert = require("node:assert/strict");
 
 function findChrome() {
@@ -45,20 +45,69 @@ const artifactDirectory = process.env.BROWSER_ARTIFACT_DIR
   : path.join(os.tmpdir(), "chatgpt-assistant-browser-artifacts");
 fs.mkdirSync(artifactDirectory, { recursive: true });
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "chatgpt-assistant-browser-"));
-const browser = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-dev-shm-usage", ...(process.env.CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1440,1000", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+const ownsProcessGroup = process.platform !== "win32";
+const browser = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-dev-shm-usage", ...(process.env.CHROME_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--window-size=1440,1000", "about:blank"], { detached: ownsProcessGroup, stdio: ["ignore", "ignore", "pipe"] });
 let browserError = "", socket, sequence = 0;
-let launchError;
+let launchError, browserClosed = false;
 browser.stderr.on("data", (chunk) => { browserError += chunk.toString(); });
 browser.on("error", (error) => { launchError = error; });
+browser.once("close", () => { browserClosed = true; });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pending = new Map(), listeners = new Map();
-function send(method, params = {}) {
+function send(method, params = {}, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return reject(new Error(`CDP connection is not open: ${method}`));
     const id = ++sequence;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 20000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, timeoutMs);
     pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
     socket.send(JSON.stringify({ id, method, params }));
   });
+}
+function signalOwnedBrowser(signal) {
+  if (!browser.pid || launchError) return false;
+  if (!ownsProcessGroup) return browser.kill(signal);
+  try {
+    // detached creates a new group containing only this test's browser and its children.
+    process.kill(-browser.pid, signal);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+function ownedBrowserGroupRunning() {
+  if (!ownsProcessGroup || !signalOwnedBrowser(0)) return false;
+  if (process.platform !== "linux") return true;
+  // Unreaped Linux zombies keep their PGID but cannot write to the profile or respond to signals.
+  return execFileSync("ps", ["-eo", "pgid=,stat="], { encoding: "utf8" }).split("\n").some((line) => {
+    const [group, state] = line.trim().split(/\s+/);
+    return Number(group) === browser.pid && state && !/^[ZX]/.test(state);
+  });
+}
+async function waitForBrowserShutdown(timeoutMs) {
+  const started = performance.now();
+  while (true) {
+    const groupRunning = ownedBrowserGroupRunning();
+    if ((browserClosed || launchError) && !groupRunning) return true;
+    if (performance.now() - started >= timeoutMs) return false;
+    await sleep(50);
+  }
+}
+async function closeBrowser() {
+  let closeError;
+  if (socket?.readyState === WebSocket.OPEN) {
+    try { await send("Browser.close", {}, 5000); }
+    catch (error) { closeError = error; } // A closing CDP connection can omit the response; wait for exit below.
+  }
+  if (!await waitForBrowserShutdown(2000)) {
+    signalOwnedBrowser("SIGTERM");
+    if (!await waitForBrowserShutdown(2000)) {
+      signalOwnedBrowser("SIGKILL");
+      if (!await waitForBrowserShutdown(5000)) {
+        throw new Error(`Test Chrome did not shut down after SIGKILL (PID ${browser.pid}): ${closeError?.message || browserError.slice(-2000)}`);
+      }
+    }
+  }
 }
 async function evaluate(expression) {
   const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true, userGesture: true });
@@ -100,6 +149,10 @@ try {
       const handler = pending.get(value.id); if (!handler) return; pending.delete(value.id);
       if (value.error) handler.reject(new Error(value.error.message)); else handler.resolve(value.result);
     } else for (const fn of listeners.get(value.method) || []) fn(value.params);
+  });
+  socket.addEventListener("close", () => {
+    for (const handler of pending.values()) handler.reject(new Error("CDP connection closed"));
+    pending.clear();
   });
   await send("Page.enable"); await send("Runtime.enable");
   listeners.set("Fetch.requestPaused", [({ requestId, resourceType }) => {
@@ -352,17 +405,13 @@ try {
   fs.writeFileSync(path.join(artifactDirectory, "popup.png"), Buffer.from(popupShot.data, "base64"));
   console.log("PASS popup empty state, options access and existing export form");
   console.log(`Screenshots: ${artifactDirectory}`);
-  console.log("All browser fixture checks passed (real Chromium; mocked extension storage and messages).");
 } finally {
-  if (socket) socket.close();
-  browser.kill("SIGTERM");
-  await new Promise((resolve) => {
-    if (launchError || browser.exitCode !== null || browser.signalCode !== null) return resolve();
-    const timer = setTimeout(() => { browser.kill("SIGKILL"); resolve(); }, 2000);
-    browser.once("exit", () => { clearTimeout(timer); resolve(); });
-  });
-  // Chrome subprocesses can still write the profile briefly after the main process exits.
+  try { await closeBrowser(); }
+  finally { if (socket) socket.close(); }
+  // Remove only this test's profile after its browser processes have stopped.
   fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
+console.log("PASS browser process shutdown and temporary profile cleanup");
+console.log("All browser fixture checks passed (real Chromium; mocked extension storage and messages).");
 
 })().catch((error) => { console.error(error); process.exitCode = 1; });
